@@ -3,6 +3,7 @@ import torch
 from geomloss import SamplesLoss
 
 from utils import nanmean, MAE, RMSE
+from CMI import CMI
 
 import logging 
 class SinkhornImputation_CMI():
@@ -28,7 +29,7 @@ class SinkhornImputation_CMI():
         self.sk = SamplesLoss("sinkhorn", p=2, blur=eps, scaling=scaling, backend="tensorized")
         self.lambda_cmi = lambda_cmi  # Store the CMI penalty trade-off parameter
 
-    def fit_transform(self, X, verbose=True, report_interval=500, X_true=None):
+    def fit_transform(self, X, verbose=True, report_interval=500, X_true=None, X_cols=None, Y_cols=None, Z_cols=None, bucket_specs=None):
         """
         Imputes missing values using a batched OT loss and a weighted CMI penalty.
         """
@@ -77,6 +78,10 @@ class SinkhornImputation_CMI():
             if torch.isnan(loss).any() or torch.isinf(loss).any():
                 logging.info("Nan or inf loss")
                 break
+            cmi = CMI.conditional_mutual_information(X_filled, X_cols, Y_cols, Z_cols, bucket_specs)
+            cmi_penalty_history.append(cmi)
+
+            loss = loss + cmi
 
             optimizer.zero_grad()
             loss.backward()
@@ -105,9 +110,9 @@ class SinkhornImputation_CMI():
         X_filled[mask.bool()] = imps
 
         if X_true is not None:
-            return X_filled, maes, rmses, sinkhorn_loss_history
+            return X_filled, maes, rmses,cmi_penalty_history
         else:
-            return X_filled, sinkhorn_loss_history
+            return X_filled,cmi_penalty_history
     '''''
     def compute_cmi_penalty(self, X_filled):
         """

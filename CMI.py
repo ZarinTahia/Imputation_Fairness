@@ -16,7 +16,7 @@ torch.set_default_tensor_type('torch.DoubleTensor')
 
 class CMI():
 
-    def bucketize_columns(self, data, bucket_specs):
+    def bucketize_columns(data, bucket_specs):
         """
         Bucketizes specific columns in a dataset using different binning strategies.
 
@@ -34,16 +34,16 @@ class CMI():
             
             min_val, max_val = feature.min(), feature.max()
             bin_edges = torch.linspace(min_val, max_val, bins + 1)
-            print(bin_edges)
+            #print(bin_edges)
             bin_edges[-1] += 1e-6 
             
             # Apply bucketization
             data_buc[:, col] = torch.bucketize(feature, bin_edges,right=True) # Start bins from 0
-            print(data_buc[:,col].long().unique())
+            #print(data_buc[:,col].long().unique())
 
         return data_buc.long()  # Convert to integer values
 
-    def compute_probabilities_torch(self,data, columns):
+    def compute_probabilities_torch(data, columns):
         """
         Compute probability distributions for given feature columns using PyTorch.
 
@@ -55,7 +55,7 @@ class CMI():
         probs = counts.float() / data.shape[0]
         return unique_vals, probs
 
-    def conditional_mutual_information_torch(self,data, X_cols, Y_cols, Z_cols, bucket_specs, delta=1):
+    def conditional_mutual_information(data, X_cols, Y_cols, Z_cols, bucket_specs, delta=1):
         """
         Compute Conditional Mutual Information I(X;Y|Z) with bucketization inside.
 
@@ -68,13 +68,13 @@ class CMI():
         :return: Conditional Mutual Information (scalar)
         """
         # Apply bucketization inside CMI function
-        bucketized_data = self.bucketize_columns(data, bucket_specs)
+        bucketized_data = CMI.bucketize_columns(data, bucket_specs)
 
         # Compute probability distributions
-        unique_Z, P_Z = self.compute_probabilities_torch(bucketized_data, Z_cols)
-        unique_XZ, P_XZ = self.compute_probabilities_torch(bucketized_data, X_cols + Z_cols)
-        unique_YZ, P_YZ = self.compute_probabilities_torch(bucketized_data, Y_cols + Z_cols)
-        unique_XYZ, P_XYZ = self.compute_probabilities_torch(bucketized_data, X_cols + Y_cols + Z_cols)
+        unique_Z, P_Z = CMI.compute_probabilities_torch(bucketized_data, Z_cols)
+        unique_XZ, P_XZ = CMI.compute_probabilities_torch(bucketized_data, X_cols + Z_cols)
+        unique_YZ, P_YZ = CMI.compute_probabilities_torch(bucketized_data, Y_cols + Z_cols)
+        unique_XYZ, P_XYZ = CMI.compute_probabilities_torch(bucketized_data, X_cols + Y_cols + Z_cols)
 
         cmi = 0
         for i in range(len(unique_XYZ)):
