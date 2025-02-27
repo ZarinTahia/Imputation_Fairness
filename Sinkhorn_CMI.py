@@ -27,7 +27,7 @@ class SinkhornImputation_CMI():
         self.n_pairs = n_pairs
         self.noise = noise
         self.sk = SamplesLoss("sinkhorn", p=2, blur=eps, scaling=scaling, backend="tensorized")
-        self.lambda_cmi = lambda_cmi  # Store the CMI penalty trade-off parameter
+        self.lambda_cmi = lambda_cmi # Store the CMI penalty trade-off parameter
 
     def fit_transform(self, X, verbose=True, report_interval=500, X_true=None, X_cols=None, Y_cols=None, Z_cols=None, bucket_specs=None):
         """
@@ -39,8 +39,6 @@ class SinkhornImputation_CMI():
         sinkhorn_loss_history = []
         cmi_penalty_history = []
 
-        imps_evolution = []  # To store imps values at each iteration
-        grad_evolution = []
 
         mask = torch.isnan(X).double()
         imps = (self.noise * torch.randn(mask.shape).double() + nanmean(X, 0))[mask.bool()]
@@ -70,7 +68,8 @@ class SinkhornImputation_CMI():
         
                 loss = loss + self.sk(X1, X2)
             
-
+            self.lambda_cmi = min(100.0, i / 100.0)
+            print(self.lambda_cmi)
             # Compute CMI penalty and apply the trade-off with lambda_cmi
             #cmi_penalty = self.compute_cmi_penalty(X_filled)
             #loss += self.lambda_cmi * cmi_penalty  # Apply the trade-off here
@@ -81,14 +80,11 @@ class SinkhornImputation_CMI():
             cmi = CMI.conditional_mutual_information(X_filled, X_cols, Y_cols, Z_cols, bucket_specs)
             cmi_penalty_history.append(cmi)
 
-            loss = loss + cmi
+            loss += self.lambda_cmi * cmi
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            #imps_evolution.append(imps.clone().detach().cpu().numpy())
-            #grad_evolution.append(imps.grad.clone().detach().cpu().numpy())
-            #logging.info(f'Iteration {i}:\t imps matrix: {imps}\t')
         
 
             if X_true is not None:
@@ -113,20 +109,4 @@ class SinkhornImputation_CMI():
             return X_filled, maes, rmses,cmi_penalty_history
         else:
             return X_filled,cmi_penalty_history
-    '''''
-    def compute_cmi_penalty(self, X_filled):
-        """
-        Compute the CMI penalty term for the imputed data.
-
-        This penalty is designed to reduce the CMI between the imputed features.
-        """
-        cmi_penalty = 0.0
-        # Iterate through pairs of features
-        for i in range(X_filled.shape[1] - 1):  # Example: iterate through pairs of features
-            for j in range(i + 1, X_filled.shape[1]):
-                cmi = compute_cmi(X_filled[:, i], X_filled[:, j], X_filled[:, -1])  # Example: condition on the last column
-                cmi_penalty += cmi
-
-        return cmi_penalty
-'''''
-
+ 

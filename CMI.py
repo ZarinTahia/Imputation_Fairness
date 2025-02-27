@@ -24,7 +24,9 @@ class CMI():
         :param bucket_specs: Dictionary {column_index: (method, num_bins or bin_edges)}
                             Example: {0: ('uniform', 3), 1: ('quantile', 4)}
         :return: Discretized tensor
+
         """
+        
         data_buc = data.detach().clone()  # Ensure no gradients
 
         for col, bins in bucket_specs.items():
