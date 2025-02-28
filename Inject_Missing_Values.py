@@ -1,3 +1,4 @@
+'''''
 import numpy as np
 import pandas as pd
 import warnings
@@ -125,7 +126,7 @@ class Inject_Missing_Values:
 
         # If no dependencies are provided, apply default behavior
         if dependencies is None:
-            print("no condition given")
+            #print("no condition given")
             dependencies = {}
             for col in data_mar.columns:
                 influencers = [c for c in data_mar.columns if c != col]
@@ -237,7 +238,7 @@ class Inject_Missing_Values:
         n_missing = int(total_cells * (missing_rate / 100))
 
         if dependencies is None:
-            print("No condition given. Provide a dependency structure for MNAR.")
+            #print("No condition given. Provide a dependency structure for MNAR.")
             return data_mnar
         
         eligible_indices_mnar = []
@@ -264,7 +265,7 @@ class Inject_Missing_Values:
         #print(probability_map)
         #print(eligible_indices_mnar)
 
-        while eligible_indices_mnar and len(mnar_missing_indices) < n_missing:
+        while eligible_indices_mnar and len(mnar_missing_indices) < n_missing:''
         
             selected_idx = np.random.choice(len(eligible_indices_mnar), p=[prob / sum(x[2] for x in eligible_indices_mnar) for _, _, prob in eligible_indices_mnar]) #randomly selected index
             target_index = eligible_indices_mnar.pop(selected_idx)
@@ -308,5 +309,121 @@ class Inject_Missing_Values:
 
 
         return data_mnar, missing_log_formatted 
+        
+'''''
+import numpy as np
+import pandas as pd
+import random
+from collections import defaultdict
 
-   
+class Inject_Missing_Values:
+    def MCAR(self, X: pd.DataFrame, selected_columns: list = None, missing_rate: int = 10, seed: int = None):
+        if not isinstance(X, pd.DataFrame):
+            raise TypeError('Dataset must be a Pandas DataFrame')
+
+        if not (0 <= missing_rate < 100):
+            raise ValueError('Missing rate must be between 0 and 100')
+
+        np.random.seed(seed)
+        dataset = X.copy().astype(float)
+        total_rows, total_cols = dataset.shape
+        num_missing = round(total_rows * total_cols * (missing_rate / 100))
+        min_per_col = int(total_rows * 0.2)  # Ensure at least 20% values remain in each column
+
+        if selected_columns is None:
+            selected_columns = dataset.columns
+        
+        col_missing_counts = {col: 0 for col in selected_columns}
+        all_indices = [(row, X.columns.get_loc(col)) for col in selected_columns for row in range(total_rows)]
+        random.shuffle(all_indices)
+
+        missing_count = 0
+        for row, col in all_indices:
+            if missing_count >= num_missing:
+                break
+            if dataset.iloc[:, col].notna().sum() > min_per_col:  # Ensure min values remain
+                dataset.iloc[row, col] = np.nan
+                col_missing_counts[X.columns[col]] += 1
+                missing_count += 1
+
+        return dataset, 0
+
+    def MAR(self, data, dependencies=None, missing_rate=15, random_seed=42):
+        np.random.seed(random_seed)
+        data_mar = data.copy().astype(float)
+        total_rows, total_cols = data_mar.shape
+        num_missing = round(total_rows * total_cols * (missing_rate / 100))
+        min_per_col = int(total_rows * 0.2)  # Ensure at least 20% values remain in each column
+
+        if dependencies is None:
+            return data_mar, 0
+
+        eligible_indices = []
+        for target, dep in dependencies.items():
+            condition = dep.get("condition", lambda row: True)
+            probability_function = dep.get("probability", lambda row: 0.1)
+            
+            condition_mask = data.apply(condition, axis=1)
+            probabilities = data.apply(probability_function, axis=1)
+
+            eligible_rows = data.index[condition_mask]
+            eligible_probs = probabilities[condition_mask]
+
+            eligible_indices.extend(
+                (row, data.columns.get_loc(target), prob) for row, prob in zip(eligible_rows, eligible_probs)
+            )
+
+        if not eligible_indices:
+            return data_mar, 0
+
+        random.shuffle(eligible_indices)
+        missing_count = 0
+        for row, col, _ in sorted(eligible_indices, key=lambda x: -x[2]):
+            if missing_count >= num_missing:
+                break
+            if data_mar.iloc[:, col].notna().sum() > min_per_col:
+                data_mar.iloc[row, col] = np.nan
+                missing_count += 1
+
+        return data_mar, 0
+
+    def MNAR(self, data, dependencies, missing_rate, random_seed=42):
+        np.random.seed(random_seed)
+        data_mnar = data.copy().astype(float)
+        total_rows, total_cols = data_mnar.shape
+        num_missing = round(total_rows * total_cols * (missing_rate / 100))
+        min_per_col = int(total_rows * 0.2)  # Ensure at least 20% values remain in each column
+
+        if dependencies is None:
+            return data_mnar, 0
+
+        eligible_indices = []
+        for target, dep in dependencies.items():
+            condition = dep.get("condition", lambda row: True)
+            probability_function = dep.get("probability", lambda row: 0.1)
+            
+            condition_mask = data.apply(condition, axis=1)
+            probabilities = data.apply(probability_function, axis=1)
+
+            eligible_rows = data.index[condition_mask]
+            eligible_probs = probabilities[condition_mask]
+
+            eligible_indices.extend(
+                (row, data.columns.get_loc(target), prob) for row, prob in zip(eligible_rows, eligible_probs)
+            )
+
+        if not eligible_indices:
+            return data_mnar, 0
+
+        random.shuffle(eligible_indices)
+        missing_count = 0
+        for row, col, _ in sorted(eligible_indices, key=lambda x: -x[2]):
+            if missing_count >= num_missing:
+                break
+            if data_mnar.iloc[:, col].notna().sum() > min_per_col:
+                data_mnar.iloc[row, col] = np.nan
+                missing_count += 1
+
+        return data_mnar, 0
+
+

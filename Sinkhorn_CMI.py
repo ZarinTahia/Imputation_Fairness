@@ -33,6 +33,10 @@ class SinkhornImputation_CMI():
         """
         Imputes missing values using a batched OT loss and a weighted CMI penalty.
         """
+
+        torch.manual_seed(42)
+        np.random.seed(42)
+    
         X = X.clone()
         n, d = X.shape
 
@@ -69,7 +73,7 @@ class SinkhornImputation_CMI():
                 loss = loss + self.sk(X1, X2)
             
             self.lambda_cmi = min(100.0, i / 100.0)
-            print(self.lambda_cmi)
+            #print(self.lambda_cmi)
             # Compute CMI penalty and apply the trade-off with lambda_cmi
             #cmi_penalty = self.compute_cmi_penalty(X_filled)
             #loss += self.lambda_cmi * cmi_penalty  # Apply the trade-off here
