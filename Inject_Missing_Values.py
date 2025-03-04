@@ -1,3 +1,206 @@
+
+import numpy as np
+import pandas as pd
+import random
+from collections import defaultdict
+
+class Inject_Missing_Values:
+    def __init__(self):
+        self.missing_log = defaultdict(set)
+        self.all_dependent_cells_mar = set()
+        self.all_dependent_cells_mnar = set()
+        self.missing_indices_mar = set()
+        self.influencing_indices_mar = set()
+        self.influence_map_mar = {}
+        
+
+    def MCAR(self, data: pd.DataFrame, selected_columns: list = None, missing_rate: int = 10, seed: int = 42):
+        if not isinstance(data, pd.DataFrame):
+            raise TypeError('Dataset must be a Pandas DataFrame')
+        if not (0 <= missing_rate < 100):
+            raise ValueError('Missing rate must be between 0 and 100')
+        
+        np.random.seed(seed)
+        X = data.copy()
+        total_rows, total_cols = X.shape
+        num_missing = round(total_rows * total_cols * (missing_rate / 100))
+        
+        all_indices = (
+            [(row, X.columns.get_loc(col)) for col in selected_columns for row in range(total_rows)]
+            if selected_columns else [(row, col) for row in range(total_rows) for col in range(total_cols)]
+        )
+        
+        pos_miss = random.sample(all_indices, min(num_missing, len(all_indices)))
+        for row, col in pos_miss:
+            X.iat[row, col] = np.nan
+            self.missing_log[(row, col)].add("MCAR")
+        
+        missing_log_formatted = {f"{row},{col}" : ",".join(types) for (row, col), types in self.missing_log.items()}
+        return X, missing_log_formatted
+
+    def MAR(self, X, dependencies=None, missing_rate=15, random_seed=42):
+
+        np.random.seed(random_seed)
+        data = X.copy()
+        total_cells = data.size
+        n_missing = int(total_cells * (missing_rate / 100))
+
+        if dependencies is None:
+            dependencies = {col: {
+                "influencers": [random.choice([c for c in data.columns if c != col])],
+                "condition": lambda row, chosen_col=random.choice(data.columns): row[chosen_col] > data[chosen_col].mean()
+            } for col in data.columns}
+
+        self.influence_map_mar = {col: [] for col in data.columns}
+        eligible_indices_mar = []
+        
+        for target, dependency in dependencies.items():
+            influencers = dependency.get("influencers", [])
+            condition = dependency.get("condition", lambda row: False)
+            probability_function = dependency.get("probability", lambda row: 1.0)
+
+            eligible_rows = data.index[data.apply(condition, axis=1)]
+            for row_index in eligible_rows:
+                prob = probability_function(data.loc[row_index])
+                eligible_indices_mar.append((row_index, data.columns.get_loc(target), prob))
+            
+            for i in influencers:
+                self.influence_map_mar[i].append(target)
+
+        #eligible_indices_mar.sort(key=lambda x: x[2], reverse=True)
+        #mar_missing_indices = eligible_indices_mar[:n_missing]
+
+        # Extract only the row and column indices, ignoring the probability field
+       
+
+# Extract row, column indices separately
+        indices = [(x[0], x[1]) for x in eligible_indices_mar]  # Extract only (row, col)
+        probabilities = [x[2] for x in eligible_indices_mar]  # Extract probability weights
+
+        # Normalize probabilities
+        total_prob = sum(probabilities)
+        normalized_probabilities = [p / total_prob for p in probabilities]
+
+        # Create index positions (0, 1, 2, ..., len(indices)-1)
+        index_positions = np.arange(len(indices))
+
+        # Select unique positions based on probability
+        print(n_missing)
+        # Ensure n_missing does not exceed the total available indices
+        n_missing = min(n_missing, len(indices))  # Prevents oversampling
+        print(n_missing)
+
+        # Select unique positions based on probability
+        selected_positions = np.random.choice(index_positions, size=n_missing, replace=False, p=normalized_probabilities)
+
+        # Map back to (row, col) tuples
+        mar_missing_indices = [indices[i] for i in selected_positions]
+
+
+        #print(self.influence_map_mar)
+
+        for row, col in mar_missing_indices:
+            data.iat[row, col] = np.nan
+            self.missing_log[(row, col)].add("MAR")
+            self.missing_indices_mar.add((row, col))
+        
+        for row, col in self.missing_indices_mar:
+
+            influencing_col = data.columns[col]
+            #print("influencing_col",influencing_col)
+            influenced_cols = self.influence_map_mar.get(influencing_col, [])
+            
+            influenced_col_indices = [data.columns.get_loc(col_name) for col_name in influenced_cols] #only the missing influencers
+        
+            self.all_dependent_cells_mar.update((row, col_idx) for col_idx in influenced_col_indices)
+            #print(self.all_dependent_cells_mar)
+        
+        for row, col in self.all_dependent_cells_mar:
+            if pd.isna(data.iat[row, col]):
+                self.missing_log[(row, col)].add("MNAR")
+        
+        missing_log_formatted = {f"{row},{col}" : ",".join(types) for (row, col), types in self.missing_log.items()}
+        return data, missing_log_formatted
+
+    def MNAR(self, X, dependencies, missing_rate, random_seed=42):
+
+        np.random.seed(random_seed)
+        data = X.copy()
+        total_cells = data.size
+        n_missing = int(total_cells * (missing_rate / 100))
+        print(n_missing)
+
+        if dependencies is None:
+            return data
+
+        eligible_indices_mnar = []
+        
+        for target, dependency in dependencies.items():
+            condition = dependency.get("condition", lambda row: False)
+            probability_function = dependency.get("probability", lambda row: 1.0)
+
+            eligible_rows = data.index[data.apply(condition, axis=1)]
+            for row_index in eligible_rows:
+                prob = probability_function(data.loc[row_index])
+                eligible_indices_mnar.append((row_index, data.columns.get_loc(target), prob))
+        
+        #eligible_indices_mnar.sort(key=lambda x: x[2], reverse=True)
+        #mnar_missing_indices = eligible_indices_mnar[:n_missing]
+
+       # Extract only the row and column indices, ignoring the probability field
+        
+
+# Extract row, column indices separately
+        indices = [(x[0], x[1]) for x in eligible_indices_mnar]  # Extract only (row, col)
+        probabilities = [x[2] for x in eligible_indices_mnar]  # Extract probability weights
+
+        # Normalize probabilities
+        total_prob = sum(probabilities)
+        normalized_probabilities = [p / total_prob for p in probabilities]
+
+        # Create index positions (0, 1, 2, ..., len(indices)-1)
+        index_positions = np.arange(len(indices))
+        print(n_missing)
+        # Ensure n_missing does not exceed the total available indices
+        n_missing = min(n_missing, len(indices))  # Prevents oversampling
+        print(n_missing)
+
+        # Select unique positions based on probability
+        selected_positions = np.random.choice(index_positions, size=n_missing, replace=False, p=normalized_probabilities)
+
+        # Map back to (row, col) tuples
+        mnar_missing_indices = [indices[i] for i in selected_positions]
+
+
+
+        for row, col in mnar_missing_indices:
+                data.iat[row, col] = np.nan
+                self.missing_log[(row, col)].add("MNAR")
+                
+            
+            # Check if any influencing MAR indices became missing, then mark its dependent cells as MNAR
+        for row, col in mnar_missing_indices:
+
+            influencing_col = data.columns[col]
+            #print("influencing_col",influencing_col)
+            influenced_cols = self.influence_map_mar.get(influencing_col, [])
+            
+            influenced_col_indices = [data.columns.get_loc(col_name) for col_name in influenced_cols] #only the missing influencers
+        
+            self.all_dependent_cells_mnar.update((row, col_idx) for col_idx in influenced_col_indices)
+            #print(self.all_dependent_cells_mar)
+        
+        for row, col in self.all_dependent_cells_mnar:
+            if pd.isna(data.iat[row, col]):
+                self.missing_log[(row, col)].add("MNAR")
+        missing_log_formatted = {f"{row},{col}" : ",".join(types) for (row, col), types in self.missing_log.items()}
+        return data, missing_log_formatted
+
+
+
+
+
+
 '''''
 import numpy as np
 import pandas as pd
@@ -311,119 +514,3 @@ class Inject_Missing_Values:
         return data_mnar, missing_log_formatted 
         
 '''''
-import numpy as np
-import pandas as pd
-import random
-from collections import defaultdict
-
-class Inject_Missing_Values:
-    def MCAR(self, X: pd.DataFrame, selected_columns: list = None, missing_rate: int = 10, seed: int = None):
-        if not isinstance(X, pd.DataFrame):
-            raise TypeError('Dataset must be a Pandas DataFrame')
-
-        if not (0 <= missing_rate < 100):
-            raise ValueError('Missing rate must be between 0 and 100')
-
-        np.random.seed(seed)
-        dataset = X.copy().astype(float)
-        total_rows, total_cols = dataset.shape
-        num_missing = round(total_rows * total_cols * (missing_rate / 100))
-        min_per_col = int(total_rows * 0.2)  # Ensure at least 20% values remain in each column
-
-        if selected_columns is None:
-            selected_columns = dataset.columns
-        
-        col_missing_counts = {col: 0 for col in selected_columns}
-        all_indices = [(row, X.columns.get_loc(col)) for col in selected_columns for row in range(total_rows)]
-        random.shuffle(all_indices)
-
-        missing_count = 0
-        for row, col in all_indices:
-            if missing_count >= num_missing:
-                break
-            if dataset.iloc[:, col].notna().sum() > min_per_col:  # Ensure min values remain
-                dataset.iloc[row, col] = np.nan
-                col_missing_counts[X.columns[col]] += 1
-                missing_count += 1
-
-        return dataset, 0
-
-    def MAR(self, data, dependencies=None, missing_rate=15, random_seed=42):
-        np.random.seed(random_seed)
-        data_mar = data.copy().astype(float)
-        total_rows, total_cols = data_mar.shape
-        num_missing = round(total_rows * total_cols * (missing_rate / 100))
-        min_per_col = int(total_rows * 0.2)  # Ensure at least 20% values remain in each column
-
-        if dependencies is None:
-            return data_mar, 0
-
-        eligible_indices = []
-        for target, dep in dependencies.items():
-            condition = dep.get("condition", lambda row: True)
-            probability_function = dep.get("probability", lambda row: 0.1)
-            
-            condition_mask = data.apply(condition, axis=1)
-            probabilities = data.apply(probability_function, axis=1)
-
-            eligible_rows = data.index[condition_mask]
-            eligible_probs = probabilities[condition_mask]
-
-            eligible_indices.extend(
-                (row, data.columns.get_loc(target), prob) for row, prob in zip(eligible_rows, eligible_probs)
-            )
-
-        if not eligible_indices:
-            return data_mar, 0
-
-        random.shuffle(eligible_indices)
-        missing_count = 0
-        for row, col, _ in sorted(eligible_indices, key=lambda x: -x[2]):
-            if missing_count >= num_missing:
-                break
-            if data_mar.iloc[:, col].notna().sum() > min_per_col:
-                data_mar.iloc[row, col] = np.nan
-                missing_count += 1
-
-        return data_mar, 0
-
-    def MNAR(self, data, dependencies, missing_rate, random_seed=42):
-        np.random.seed(random_seed)
-        data_mnar = data.copy().astype(float)
-        total_rows, total_cols = data_mnar.shape
-        num_missing = round(total_rows * total_cols * (missing_rate / 100))
-        min_per_col = int(total_rows * 0.2)  # Ensure at least 20% values remain in each column
-
-        if dependencies is None:
-            return data_mnar, 0
-
-        eligible_indices = []
-        for target, dep in dependencies.items():
-            condition = dep.get("condition", lambda row: True)
-            probability_function = dep.get("probability", lambda row: 0.1)
-            
-            condition_mask = data.apply(condition, axis=1)
-            probabilities = data.apply(probability_function, axis=1)
-
-            eligible_rows = data.index[condition_mask]
-            eligible_probs = probabilities[condition_mask]
-
-            eligible_indices.extend(
-                (row, data.columns.get_loc(target), prob) for row, prob in zip(eligible_rows, eligible_probs)
-            )
-
-        if not eligible_indices:
-            return data_mnar, 0
-
-        random.shuffle(eligible_indices)
-        missing_count = 0
-        for row, col, _ in sorted(eligible_indices, key=lambda x: -x[2]):
-            if missing_count >= num_missing:
-                break
-            if data_mnar.iloc[:, col].notna().sum() > min_per_col:
-                data_mnar.iloc[row, col] = np.nan
-                missing_count += 1
-
-        return data_mnar, 0
-
-

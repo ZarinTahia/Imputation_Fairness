@@ -72,6 +72,8 @@ class SinkhornImputation_CMI():
         
                 loss = loss + self.sk(X1, X2)
             
+            sinkhorn_loss_history.append(loss)
+            
             self.lambda_cmi = min(100.0, i / 100.0)
             #print(self.lambda_cmi)
             # Compute CMI penalty and apply the trade-off with lambda_cmi
@@ -110,7 +112,7 @@ class SinkhornImputation_CMI():
         X_filled[mask.bool()] = imps
 
         if X_true is not None:
-            return X_filled, maes, rmses,cmi_penalty_history
+            return X_filled, maes, rmses,cmi_penalty_history,sinkhorn_loss_history
         else:
-            return X_filled,cmi_penalty_history
+            return X_filled,cmi_penalty_history,sinkhorn_loss_history
  
