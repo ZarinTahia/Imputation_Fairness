@@ -85,10 +85,10 @@ class Inject_Missing_Values:
         index_positions = np.arange(len(indices))
 
         # Select unique positions based on probability
-        print(n_missing)
+        #print(n_missing)
         # Ensure n_missing does not exceed the total available indices
         n_missing = min(n_missing, len(indices))  # Prevents oversampling
-        print(n_missing)
+        #print(n_missing)
 
         # Select unique positions based on probability
         selected_positions = np.random.choice(index_positions, size=n_missing, replace=False, p=normalized_probabilities)
@@ -128,7 +128,7 @@ class Inject_Missing_Values:
         data = X.copy()
         total_cells = data.size
         n_missing = int(total_cells * (missing_rate / 100))
-        print(n_missing)
+        #print(n_missing)
 
         if dependencies is None:
             return data
@@ -160,10 +160,10 @@ class Inject_Missing_Values:
 
         # Create index positions (0, 1, 2, ..., len(indices)-1)
         index_positions = np.arange(len(indices))
-        print(n_missing)
+        #print(n_missing)
         # Ensure n_missing does not exceed the total available indices
         n_missing = min(n_missing, len(indices))  # Prevents oversampling
-        print(n_missing)
+        #print(n_missing)
 
         # Select unique positions based on probability
         selected_positions = np.random.choice(index_positions, size=n_missing, replace=False, p=normalized_probabilities)

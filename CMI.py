@@ -1,5 +1,5 @@
 
-
+'''''
 import torch
 import numpy as np
 import torch
@@ -102,3 +102,85 @@ class CMI():
 
         return cmi.item()
 
+'''''
+
+import torch
+import numpy as np
+import torch.nn as nn
+import pandas as pd
+from sklearn.preprocessing import scale
+from sklearn.experimental import enable_iterative_imputer
+from sklearn.impute import SimpleImputer, IterativeImputer
+import logging
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+torch.set_default_tensor_type('torch.DoubleTensor')
+
+class CMI:
+    @staticmethod
+    def bucketize_columns(data, bucket_specs):
+        """
+        Efficiently bucketizes columns using vectorized operations.
+        """
+        data_buc = data.clone()  # Ensure no gradients
+        
+        for col, bins in bucket_specs.items():
+            feature = data_buc[:, col]
+            min_val, max_val = feature.min(), feature.max()
+            bin_edges = torch.linspace(min_val, max_val, bins + 1, device=data.device)
+            bin_edges[-1] += 1e-6  # Ensure max value inclusion
+            
+            data_buc[:, col] = torch.searchsorted(bin_edges, feature, right=True) - 1
+        
+        return data_buc.long()
+    
+    @staticmethod
+    def compute_probabilities_torch(data, columns):
+        """
+        Compute probability distributions efficiently.
+        """
+        unique_vals, counts = torch.unique(data[:, columns], dim=0, return_counts=True)
+        return unique_vals, counts / data.shape[0]
+
+    @staticmethod
+    def conditional_mutual_information(data, X_cols, Y_cols, Z_cols, bucket_specs, delta=1):
+        """
+        Compute Conditional Mutual Information I(X;Y|Z) efficiently.
+        """
+        with torch.no_grad():
+            bucketized_data = CMI.bucketize_columns(data, bucket_specs)
+            
+            prob_cache = {}
+            columns_list = [Z_cols, X_cols + Z_cols, Y_cols + Z_cols, X_cols + Y_cols + Z_cols]
+            keys = ['Z', 'XZ', 'YZ', 'XYZ']
+            
+            for key, cols in zip(keys, columns_list):
+                prob_cache[key] = CMI.compute_probabilities_torch(bucketized_data, cols)
+            
+            unique_XYZ, P_XYZ = prob_cache['XYZ']
+            unique_Z, P_Z = prob_cache['Z']
+            unique_XZ, P_XZ = prob_cache['XZ']
+            unique_YZ, P_YZ = prob_cache['YZ']
+            
+            cmi = torch.tensor(0.0, device=data.device)
+            
+            for i, xyz in enumerate(unique_XYZ):
+                z = xyz[len(X_cols + Y_cols):]
+                xz = torch.cat((xyz[:len(X_cols)], z))
+                yz = torch.cat((xyz[len(X_cols):len(X_cols + Y_cols)], z))
+                
+                mask_z = (unique_Z == z).all(dim=1)
+                mask_xz = (unique_XZ == xz).all(dim=1)
+                mask_yz = (unique_YZ == yz).all(dim=1)
+                
+                if mask_z.any() and mask_xz.any() and mask_yz.any():
+                    P_z = P_Z[mask_z].sum()
+                    P_xyz = P_XYZ[i]
+                    P_xz = P_XZ[mask_xz].sum()
+                    P_yz = P_YZ[mask_yz].sum()
+                    
+                    cmi += delta * P_xyz * torch.log2((P_z * P_xyz) / (P_xz * P_yz + 1e-10))
+            
+            return cmi.item()

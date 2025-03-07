@@ -27,7 +27,7 @@ class SinkhornImputation_CMI():
         self.n_pairs = n_pairs
         self.noise = noise
         self.sk = SamplesLoss("sinkhorn", p=2, blur=eps, scaling=scaling, backend="tensorized")
-        self.lambda_cmi = lambda_cmi # Store the CMI penalty trade-off parameter
+        self.lambda_cmi = eps # Store the CMI penalty trade-off parameter
 
     def fit_transform(self, X, verbose=True, report_interval=500, X_true=None, X_cols=None, Y_cols=None, Z_cols=None, bucket_specs=None):
         """
@@ -71,10 +71,12 @@ class SinkhornImputation_CMI():
                 X2 = X_filled[idx2]
         
                 loss = loss + self.sk(X1, X2)
+                
             
-            sinkhorn_loss_history.append(loss)
+        
             
-            self.lambda_cmi = min(100.0, i / 100.0)
+            #self.lambda_cmi = min(100.0, i / 100.0)
+            
             #print(self.lambda_cmi)
             # Compute CMI penalty and apply the trade-off with lambda_cmi
             #cmi_penalty = self.compute_cmi_penalty(X_filled)
@@ -85,6 +87,8 @@ class SinkhornImputation_CMI():
                 break
             cmi = CMI.conditional_mutual_information(X_filled, X_cols, Y_cols, Z_cols, bucket_specs)
             cmi_penalty_history.append(cmi)
+            self.lambda_cmi = min(200.00, i*(loss.item() / cmi))
+
 
             loss += self.lambda_cmi * cmi
 
@@ -101,11 +105,13 @@ class SinkhornImputation_CMI():
 
             if verbose and (i % report_interval == 0):
                 if X_true is not None:
+                    sinkhorn_loss_history.append(loss)
                     logging.info(f'Iteration {i}:\t Loss: {loss.item() / self.n_pairs:.4f}\t '
                                  f'Validation MAE: {maes[i]:.4f}\t'
                                  f'RMSE: {rmses[i]:.4f}')
                     
                 else:
+                    sinkhorn_loss_history.append(loss)
                     logging.info(f'Iteration {i}:\t Loss: {loss.item() / self.n_pairs:.4f}')
                     
         X_filled = X.detach().clone()
