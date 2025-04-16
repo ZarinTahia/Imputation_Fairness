@@ -14,7 +14,7 @@ class Inject_Missing_Values:
         self.influence_map_mar = {}
         
 
-    def MCAR(self, data: pd.DataFrame, selected_columns: list = None, missing_rate: int = 10, seed: int = 42):
+    def MCAR(self, data: pd.DataFrame, selected_columns: list = None, missing_rate: int = 10, seed: int = None):
         if not isinstance(data, pd.DataFrame):
             raise TypeError('Dataset must be a Pandas DataFrame')
         if not (0 <= missing_rate < 100):
@@ -38,7 +38,7 @@ class Inject_Missing_Values:
         missing_log_formatted = {f"{row},{col}" : ",".join(types) for (row, col), types in self.missing_log.items()}
         return X, missing_log_formatted
 
-    def MAR(self, X, dependencies=None, missing_rate=15, random_seed=42):
+    def MAR(self, X, dependencies=None, missing_rate=15, random_seed=None):
 
         np.random.seed(random_seed)
         data = X.copy()
@@ -122,7 +122,7 @@ class Inject_Missing_Values:
         missing_log_formatted = {f"{row},{col}" : ",".join(types) for (row, col), types in self.missing_log.items()}
         return data, missing_log_formatted
 
-    def MNAR(self, X, dependencies, missing_rate, random_seed=42):
+    def MNAR(self, X, dependencies, missing_rate, random_seed=None):
 
         np.random.seed(random_seed)
         data = X.copy()
