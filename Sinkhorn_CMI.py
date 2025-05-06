@@ -57,6 +57,11 @@ class SinkhornImputation_CMI():
         if X_true is not None:
             maes = np.zeros(self.niter)
             rmses = np.zeros(self.niter)
+        
+        all_indices = np.arange(n)
+        np.random.shuffle(all_indices)
+        num_batches = n // self.batchsize
+        precomputed_indices = np.array_split(all_indices, num_batches)
      
 
         for i in range(self.niter):
@@ -65,10 +70,12 @@ class SinkhornImputation_CMI():
             X_filled[mask.bool()] = imps
             loss = 0
 
+
+
             # Sinkhorn Loss
             for _ in range(self.n_pairs):
-                idx1 = np.random.choice(n, self.batchsize, replace=False)
-                idx2 = np.random.choice(n, self.batchsize, replace=False)
+                idx1 = precomputed_indices[i % num_batches]
+                idx2 = precomputed_indices[(i + 1) % num_batches]
         
                 X1 = X_filled[idx1]
                 X2 = X_filled[idx2]
@@ -127,6 +134,8 @@ class SinkhornImputation_CMI():
         if X_true is not None:
             return X_filled, maes, rmses,cmi_penalty_history,sinkhorn_loss_history,lamda_cmi
         else:
-            return X_filled,cmi_penalty_history,sinkhorn_loss_history,lamda_cmi
+            maes = None
+            rmses = None
+            return X_filled, maes, rmses, cmi_penalty_history,sinkhorn_loss_history,lamda_cmi
    
     

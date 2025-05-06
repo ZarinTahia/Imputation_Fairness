@@ -169,4 +169,6 @@ class SinkhornImputation():
         if X_true is not None:
             return X_filled, maes, rmses
         else:
-            return X_filled
+            maes = None
+            rmses = None
+            return X_filled, maes, rmses

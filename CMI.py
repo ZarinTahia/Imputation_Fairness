@@ -15,30 +15,81 @@ torch.set_default_tensor_type('torch.DoubleTensor')
 
 import torch
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
+
+
 
 class CMI:
 
+    @staticmethod
+    def bucketize_columns(data, bucket_specs):
+        
+        
+        data_buc = data.clone()  # Ensure no gradients
+        
+        for col, bins in bucket_specs.items():
+            feature = data_buc[:, col]
+            min_val, max_val = feature.min(), feature.max()
+            bin_edges = torch.linspace(min_val, max_val, bins + 1, device=data.device)
+            bin_edges[-1] += 1e-6  # Ensure max value inclusion
+            
+            data_buc[:, col] = torch.searchsorted(bin_edges, feature, right=True) - 1
+            #print(torch.unique(data_buc[:,col]))
+        
+        
+        
+        return data_buc.long()
 
     @staticmethod
-    def bucketization(data, bucket_specs):
-       
-        device = data.device
-        bucketized = data.clone() # Clone to avoid modifying the original tensor
-
-        for col, n_bins in bucket_specs.items():
-            col_data = bucketized[:, col]
+    def compute_probabilities_torch(data, columns):
         
-        # Compute bin edges using quantiles (equal-frequency bins)
-            quantiles = torch.linspace(0, 1, n_bins + 1, device=data.device)
-            bin_edges = torch.quantile(col_data, quantiles)
-            
-            # Digitize: assign bin indices (0 to n_bins-1)
-            bin_indices = torch.bucketize(col_data, bin_edges[1:-1])  # exclude first and last edge
-            
-            # Replace the column with bucket indices
-            bucketized[:, col] = bin_indices
+        unique_vals, counts = torch.unique(data[:, columns], dim=0, return_counts=True)
+        return unique_vals, counts / data.shape[0]
 
-        return bucketized
+   
+    @staticmethod
+    def conditional_mutual_information(data, bucket_specs, X_cols, Y_cols, Z_cols):
+
+        bucketized_data = CMI.bucketize_columns(data, bucket_specs)
+            
+        prob_cache = {}
+        columns_list = [Z_cols, X_cols + Z_cols, Y_cols + Z_cols, X_cols + Y_cols + Z_cols]
+        keys = ['Z', 'XZ', 'YZ', 'XYZ']
+            
+        for key, cols in zip(keys, columns_list):
+            prob_cache[key] = CMI.compute_probabilities_torch(bucketized_data, cols)
+            
+        unique_XYZ, P_XYZ = prob_cache['XYZ']
+        unique_Z, P_Z = prob_cache['Z']
+        unique_XZ, P_XZ = prob_cache['XZ']
+        unique_YZ, P_YZ = prob_cache['YZ']
+            
+        cmi = torch.tensor(0.0, device=data.device, dtype=torch.float64)
+           
+
+            
+        for i, xyz in enumerate(unique_XYZ):
+                z = xyz[len(X_cols + Y_cols):]
+                xz = torch.cat((xyz[:len(X_cols)], z))
+                yz = torch.cat((xyz[len(X_cols):len(X_cols + Y_cols)], z))
+                
+                mask_z = (unique_Z == z).all(dim=1)
+                mask_xz = (unique_XZ == xz).all(dim=1)
+                mask_yz = (unique_YZ == yz).all(dim=1)
+                
+                if mask_z.any() and mask_xz.any() and mask_yz.any():
+                    P_z = P_Z[mask_z].sum()
+                    P_xyz = P_XYZ[i]
+                    P_xz = P_XZ[mask_xz].sum()
+                    P_yz = P_YZ[mask_yz].sum()
+                    cmi =  cmi + P_xyz * torch.log((P_z * P_xyz) / (P_xz * P_yz + 1e-10))
+        
+        
+        return torch.clamp(cmi, min=0.00001)
+
+
+"""""""""""
+class CMI:
 
 
     @staticmethod
@@ -133,7 +184,7 @@ class CMI:
 
 
 
-"""""""""""
+
 
 class CMI:
 
@@ -185,6 +236,28 @@ class CMI:
             data_buc[:, col] = bucket_indices
         
         return data_buc
+
+     @staticmethod
+    def bucketization(data, bucket_specs):
+       
+        device = data.device
+        bucketized = data.clone() # Clone to avoid modifying the original tensor
+
+        for col, n_bins in bucket_specs.items():
+            col_data = bucketized[:, col]
+        
+        # Compute bin edges using quantiles (equal-frequency bins)
+            quantiles = torch.linspace(0, 1, n_bins + 1, device=data.device)
+            bin_edges = torch.quantile(col_data, quantiles)
+            
+            # Digitize: assign bin indices (0 to n_bins-1)
+            bin_indices = torch.bucketize(col_data, bin_edges[1:-1])  # exclude first and last edge
+            
+            # Replace the column with bucket indices
+            bucketized[:, col] = bin_indices
+
+        return bucketized
+
 
     @staticmethod
     def c_m_i(data, bucket_specs, X_cols, Y_cols, Z_cols):

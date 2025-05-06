@@ -40,10 +40,14 @@ class Inject_Missing_Values:
 
     def MAR(self, X, dependencies=None, missing_rate=15, random_seed=None):
 
+      
+
         np.random.seed(random_seed)
         data = X.copy()
         total_cells = data.size
+       
         n_missing = int(total_cells * (missing_rate / 100))
+      
 
         if dependencies is None:
             dependencies = {col: {
@@ -55,6 +59,7 @@ class Inject_Missing_Values:
         eligible_indices_mar = []
         
         for target, dependency in dependencies.items():
+        
             influencers = dependency.get("influencers", [])
             condition = dependency.get("condition", lambda row: False)
             probability_function = dependency.get("probability", lambda row: 1.0)
@@ -63,10 +68,11 @@ class Inject_Missing_Values:
             for row_index in eligible_rows:
                 prob = probability_function(data.loc[row_index])
                 eligible_indices_mar.append((row_index, data.columns.get_loc(target), prob))
+               
             
             for i in influencers:
                 self.influence_map_mar[i].append(target)
-
+      
         #eligible_indices_mar.sort(key=lambda x: x[2], reverse=True)
         #mar_missing_indices = eligible_indices_mar[:n_missing]
 
@@ -75,6 +81,8 @@ class Inject_Missing_Values:
 
 # Extract row, column indices separately
         indices = [(x[0], x[1]) for x in eligible_indices_mar]  # Extract only (row, col)
+        
+        
         probabilities = [x[2] for x in eligible_indices_mar]  # Extract probability weights
 
         # Normalize probabilities
@@ -83,16 +91,17 @@ class Inject_Missing_Values:
 
         # Create index positions (0, 1, 2, ..., len(indices)-1)
         index_positions = np.arange(len(indices))
+       
 
         # Select unique positions based on probability
         #print(n_missing)
         # Ensure n_missing does not exceed the total available indices
         n_missing = min(n_missing, len(indices))  # Prevents oversampling
-        #print(n_missing)
+       
 
         # Select unique positions based on probability
         selected_positions = np.random.choice(index_positions, size=n_missing, replace=False, p=normalized_probabilities)
-
+       
         # Map back to (row, col) tuples
         mar_missing_indices = [indices[i] for i in selected_positions]
 

@@ -18,9 +18,19 @@ from Sinkhorn_CMI import *
 from RR_imputer import RRimputer
 import matplotlib.pyplot as plt
 from CMI import *
+from sklearn.linear_model import LogisticRegression 
+from sklearn.metrics import accuracy_score
+
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from fairlearn.metrics import (
+    demographic_parity_difference,  # Measures selection rate disparity
+    equalized_odds_difference,     # Measures TPR/FPR disparity
+      # Reports accuracy per group
+)
 
 from Inject_Missing_Values import *
-
+import numpy as np
 import logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -46,6 +56,7 @@ def generateMissingValues(X,Y,missing_type,missing_rate,dependencies=None):
     
     if missing_type == "MAR":
         generator_mar = Inject_Missing_Values()
+        print(X.shape)
         miss_mar,index_mar = generator_mar.MAR(X,dependencies,missing_rate)
         miss_mar = pd.concat([miss_mar, Y], axis=1) #adding the target coloumn
 
@@ -91,14 +102,16 @@ def sinkhor(groundTruth_tensor,miss_data_tensor, mask, niter,bucket_specs, X_col
 
     #using numpy version of data
     sk_imp_data_numpy = sk_imp_data.detach().cpu().numpy()
-    sk_mae = MAE(sk_imp_data,groundTruth_tensor , mask)
-    #sk_rmse = RMSE(sk_imp_data, groundTruth_tensor, mask)
-    #print("MAE:", sk_mae)
 
-    sk_cmi = CMI.c_m_i(sk_imp_data, bucket_specs, X_cols, Y_cols, Z_cols)
-    #print("CMI:", sk_cmi)
+    if groundTruth_tensor != None:
+        sk_mae = MAE(sk_imp_data,groundTruth_tensor , mask)
+        #print("MAE:", sk_mae)
+        sk_cmi = CMI.c_m_i(sk_imp_data, bucket_specs, X_cols, Y_cols, Z_cols)
+        #print("CMI:", sk_cmi)
+        return sk_imp_data, sk_mae_track, sk_mae, sk_cmi
+    else:
+        return sk_imp_data_numpy 
 
-    return sk_imp_data, sk_mae_track, sk_mae, sk_cmi
 
 #sinkhorn_CMI
 def sinkhornCMI(groundTruth_tensor,miss_data_tensor, mask, niter,highest_lamda_cmi,bucket_specs, X_cols, Y_cols, Z_cols):
@@ -112,47 +125,65 @@ def sinkhornCMI(groundTruth_tensor,miss_data_tensor, mask, niter,highest_lamda_c
 
 
     sk_cmi_imputer = SinkhornImputation_CMI(eps=epsilon, batchsize=batchsize, lr=lr, niter = niter,highest_lamda_cmi = highest_lamda_cmi)
-    sk_cmi_imp, sk_cmi_mae_track, sk_cmi_rmse_track, cmi_loss_track, sinkhorn_loss_track, lamda_cmi_track = sk_cmi_imputer.fit_transform(miss_data_tensor, True, 50, groundTruth_tensor, X_cols, Y_cols, Z_cols, bucket_specs)
+    sk_cmi_imp_data, sk_cmi_mae_track, sk_cmi_rmse_track, cmi_loss_track, sinkhorn_loss_track, lamda_cmi_track = sk_cmi_imputer.fit_transform(miss_data_tensor, True, 50, groundTruth_tensor, X_cols, Y_cols, Z_cols, bucket_specs)
     #using numpy version of data
-    sk_imp_data_numpy = sk_cmi_imp.detach().cpu().numpy()
+   
+    sk_cmi_imp_data_numpy = sk_cmi_imp_data.detach().cpu().numpy()
+    #print(sk_cmi_imp_data_numpy)
 
-    sk_cmi_mae = MAE(sk_cmi_imp, groundTruth_tensor , mask)
-    sk_cmi_rmse = RMSE(sk_cmi_imp, groundTruth_tensor, mask)
+    if groundTruth_tensor != None:
+
+        sk_cmi_mae = MAE(sk_cmi_imp_data, groundTruth_tensor , mask)
+        sk_cmi = CMI.c_m_i(sk_cmi_imp_data, bucket_specs, X_cols, Y_cols, Z_cols)
+        return sk_cmi_imp_data, sk_cmi_mae_track, sk_cmi_rmse_track, cmi_loss_track, sinkhorn_loss_track, lamda_cmi_track, sk_cmi_mae, sk_cmi
+    else:
+       return sk_cmi_imp_data_numpy
+
     
-    sk_cmi = CMI.c_m_i(sk_cmi_imp, bucket_specs, X_cols, Y_cols, Z_cols)
-
-
-    return sk_cmi_imp, sk_cmi_mae_track, sk_cmi_rmse_track, cmi_loss_track, sinkhorn_loss_track, lamda_cmi_track, sk_cmi_mae, sk_cmi
-
-
 def mean(groundTruth_tensor,miss_data_tensor, mask, bucket_specs, X_cols, Y_cols, Z_cols):
 
     mask = torch.isnan(miss_data_tensor).double()
-    mean_imp_data = SimpleImputer().fit_transform(miss_data_tensor) #numpy
-    mean_imp_data_tensor = torch.tensor(mean_imp_data) #tensor
-    mean_mae = MAE(mean_imp_data_tensor, groundTruth_tensor , mask)
+    mean_imp_data_numpy = SimpleImputer().fit_transform(miss_data_tensor.numpy()) #numpy
+    mean_imp_data_tensor = torch.tensor(mean_imp_data_numpy) #tensor
+ 
+    
 
-    #print("MAE",mean_mae)
+    if groundTruth_tensor != None:
+        mean_mae = MAE(mean_imp_data_tensor, groundTruth_tensor , mask)
 
-    mean_cmi = CMI.c_m_i(mean_imp_data_tensor, bucket_specs, X_cols, Y_cols, Z_cols)
-    #print("CMI",cmi_mean)
+        #print("MAE",mean_mae)
 
-    return mean_imp_data_tensor, mean_mae, mean_cmi
+        mean_cmi = CMI.c_m_i(mean_imp_data_tensor, bucket_specs, X_cols, Y_cols, Z_cols)
+        #print("CMI",cmi_mean)
+
+        return mean_imp_data_tensor, mean_mae, mean_cmi
+    
+    else:
+        return mean_imp_data_numpy
 
 
 
 def ice(groundTruth_tensor, miss_data_tensor, niter, mask, bucket_specs, X_cols, Y_cols, Z_cols):
    
     mask = torch.isnan(miss_data_tensor).double()
-    ice_imp_data = IterativeImputer(random_state=0, max_iter = 500).fit_transform(miss_data_tensor) #numpy
-    ice_imp_data_tensor = torch.tensor(ice_imp_data) #tensor
-    ice_mae = MAE(ice_imp_data_tensor, groundTruth_tensor , mask)
-    #print("MAE",ice_mae)
 
-    ice_cmi = CMI.c_m_i(ice_imp_data_tensor, bucket_specs, X_cols, Y_cols, Z_cols)
-    #print("CMI",ice_cmi)
+    ice_imp_data_numpy = IterativeImputer(random_state=0, max_iter = 500).fit_transform(miss_data_tensor.numpy()) #numpy
+    
+    ice_imp_data_tensor = torch.tensor(ice_imp_data_numpy) #tensor
 
-    return ice_imp_data_tensor, ice_mae, ice_cmi
+    if groundTruth_tensor != None:
+        ice_mae = MAE(ice_imp_data_tensor, groundTruth_tensor , mask)
+        #print("MAE",ice_mae)
+
+        ice_cmi = CMI.c_m_i(ice_imp_data_tensor, bucket_specs, X_cols, Y_cols, Z_cols)
+        #print("CMI",ice_cmi)
+
+        return ice_imp_data_tensor, ice_mae, ice_cmi
+    
+    else:
+        return ice_imp_data_numpy
+    
+
 
 def softImpute(groundTruth_tensor, miss_data_tensor, mask, bucket_specs, X_cols, Y_cols, Z_cols):
     
@@ -162,15 +193,45 @@ def softImpute(groundTruth_tensor, miss_data_tensor, mask, bucket_specs, X_cols,
     lbda = grid_lambda[np.argmin(cv_error)]
     soft_imp_data_numpy = softimpute((miss_data_numpy), lbda)[1]
     soft_imp_data_tensor = torch.tensor(soft_imp_data_numpy)
+    
+    if groundTruth_tensor != None:
 
-    soft_mae = MAE(soft_imp_data_tensor, groundTruth_tensor , mask)
-    #print("MAE",soft_mae)
+        soft_mae = MAE(soft_imp_data_tensor, groundTruth_tensor , mask)
+        #print("MAE",soft_mae)
 
-    soft_cmi = CMI.c_m_i(soft_imp_data_tensor, bucket_specs, X_cols, Y_cols, Z_cols)
-    #print("CMI",soft_cmi)
+        soft_cmi = CMI.c_m_i(soft_imp_data_tensor, bucket_specs, X_cols, Y_cols, Z_cols)
+        #print("CMI",soft_cmi)
 
-    return soft_imp_data_tensor, soft_mae, soft_cmi
+        return soft_imp_data_tensor, soft_mae, soft_cmi
+    else:
+         return soft_imp_data_numpy
 
+import numpy as np
+
+def bucketize(data, bucket_specs=None):
+
+    if bucket_specs == None:
+        binary_mean = (data > np.mean(data)).astype(int)
+        return binary_mean
+
+    data_buc = data.copy()
+    if bucket_specs is None:
+        # Bucketize all columns into binary bins
+        bucket_specs = {col: 2 for col in range(data.shape[1])}
+
+    for col, bins in bucket_specs.items():
+        feature = data[:, col]
+        min_val, max_val = feature.min(), feature.max()
+        bin_edges = np.linspace(min_val, max_val, bins+1)
+        bin_edges[-1] += 1e-6
+        
+        # Soft bucket assignment
+       
+        bucket_indices = np.digitize(feature, bin_edges) - 1
+        
+        data_buc[:, col] = bucket_indices
+    return data_buc
+    
 
 
 def run(groundTruth_tensor, X, Y, cycle, missing_type, missing_rate, dependencies, highest_lamda_cmi, niter,bucket_specs, X_cols, Y_cols, Z_cols):
@@ -189,6 +250,7 @@ def run(groundTruth_tensor, X, Y, cycle, missing_type, missing_rate, dependencie
 
 
     for i in range(cycle):
+
         miss_data_tensor, index_mnar, mask = generateMissingValues(X, Y, missing_type, missing_rate, dependencies=dependencies)
         row_mask = mask.bool().all(dim=1)
         ugly_data = miss_data_tensor[row_mask]
@@ -220,6 +282,137 @@ def run(groundTruth_tensor, X, Y, cycle, missing_type, missing_rate, dependencie
     return sk_mae, sk_cmi, skCmi_mae, skCmi_cmi, mean_mae, mean_cmi, ice_mae, ice_cmi, soft_mae,  soft_cmi
 
 
-def visualize():
- print("abc")
+
+def imputation_accuracy_parity(ground_truth, imputed_data, protected_attr):
+    """
+    Computes the average absolute difference in imputation MSE for each feature 
+    between two protected groups (0 and 1).
+
+    Parameters:
+        ground_truth (np.ndarray): Original complete dataset (n_samples, n_features)
+        imputed_data (np.ndarray): Imputed dataset (n_samples, n_features)
+        protected_attr (np.ndarray): Binary array (n_samples,) representing group membership
+
+    Returns:
+        float: Mean absolute MSE gap across all features
+    """
+    group0_mask = protected_attr == 0
+    group1_mask = protected_attr == 1
+
+    mae_diffs = []
+
+    for i in range(ground_truth.shape[1]):
+        # Get the ith feature
+        gt_col = ground_truth[:, i]
+        imp_col = imputed_data[:, i]
+
+        # MSE for each group
+        mse_0 = np.mean((gt_col[group0_mask] - imp_col[group0_mask]) )
+        mse_1 = np.mean((gt_col[group1_mask] - imp_col[group1_mask]) )
+
+        mae_diffs.append(abs(mse_0 - mse_1))
+
+    return np.mean(mae_diffs)
+
+def IAPD(groundTruth_scaled_numpy, protected_attr,sensitive_attribute_index, sk_imp_data, sk_cmi_imp_data, mean_imp_data, ice_imp_data, soft_imp_data ):
+
+    protected_attr_sk = sk_imp_data[:,sensitive_attribute_index]
+    protected_attr_sk = bucketize(protected_attr_sk)
+    sk_imp_data[:,1] = protected_attr_sk
+
+    sk_iap = imputation_accuracy_parity(groundTruth_scaled_numpy, sk_imp_data, protected_attr)
+   
+
+    protected_attr_sk_cmi = sk_cmi_imp_data[:,sensitive_attribute_index]
+    protected_attr_sk_cmi = bucketize(protected_attr_sk_cmi)
+    sk_cmi_imp_data[:,1] = protected_attr_sk_cmi
+
+    sk_cmi_iap = imputation_accuracy_parity(groundTruth_scaled_numpy, sk_cmi_imp_data, protected_attr)
+   
+
+    protected_attr_mean = mean_imp_data[:,sensitive_attribute_index]
+    protected_attr_mean = bucketize(protected_attr_mean)
+    mean_imp_data[:,1] = protected_attr_mean
+
+    mean_iap = imputation_accuracy_parity(groundTruth_scaled_numpy, mean_imp_data, protected_attr)
+   
+
+    protected_attr_ice = ice_imp_data[:,sensitive_attribute_index]
+    protected_attr_ice = bucketize(protected_attr_ice)
+    ice_imp_data[:,1] = protected_attr_ice
+    ice_iap = imputation_accuracy_parity(groundTruth_scaled_numpy, ice_imp_data, protected_attr)
+    
+
+
+    protected_attr_soft = soft_imp_data[:,sensitive_attribute_index]
+    protected_attr_soft = bucketize(protected_attr_soft)
+    soft_imp_data[:,1] = protected_attr_soft
+    soft_iap = imputation_accuracy_parity(groundTruth_scaled_numpy, soft_imp_data, protected_attr)
+    
+    return  sk_iap, sk_cmi_iap, mean_iap, ice_iap, soft_iap
+
+
+
+def imputation(X, Y, missing_type, missing_rate, dependencies, highest_lamda_cmi, niter,bucket_specs, X_cols, Y_cols, Z_cols):
+    
+    groundTruth_tensor = None
+
+    miss_data_tensor, missing_index, mask = generateMissingValues(X, Y, missing_type, missing_rate, dependencies=dependencies)
+    
+
+    sk_imp_data_numpy = sinkhor(groundTruth_tensor,miss_data_tensor, mask, niter,bucket_specs, X_cols, Y_cols, Z_cols)
+        
+        
+    sk_cmi_imp_data_numpy = sinkhornCMI(groundTruth_tensor, miss_data_tensor, mask, niter, highest_lamda_cmi, bucket_specs, X_cols, Y_cols, Z_cols)
+        
+
+    mean_imp_data_numpy = mean(groundTruth_tensor,miss_data_tensor, mask, bucket_specs, X_cols, Y_cols, Z_cols)
+        
+
+    ice_imp_data_numpy = ice(groundTruth_tensor, miss_data_tensor, niter, mask, bucket_specs, X_cols, Y_cols, Z_cols)
+        
+
+    soft_imp_data_numpy = softImpute(groundTruth_tensor, miss_data_tensor, mask, bucket_specs, X_cols, Y_cols, Z_cols)
+        
+
+    return  sk_imp_data_numpy, sk_cmi_imp_data_numpy, mean_imp_data_numpy, ice_imp_data_numpy, soft_imp_data_numpy
+
+
+
+
+def machineLearning(x_train, y_train, x_test, y_test, protected_attr_idx, bucket_specs):
+    
+    x_train = bucketize(x_train, bucket_specs) #bucketizing the sensitive attributes
+    x_test = bucketize(x_test, bucket_specs) #bucketizing the sensitive attributes
+    #protected_attr_test = x_test[:,protected_attr_idx]
+    #protected_attr_test = bucketize(protected_attr_test)
+    #x_test[:,protected_attr_idx] = protected_attr_test 
+
+    #protected_attr_train = x_train[:,protected_attr_idx]
+    #protected_attr_train = bucketize(protected_attr_train)
+    #x_train[:,protected_attr_idx] = protected_attr_train
+    #print(x_test)
+    #print(x_train)
+
+    model = LogisticRegression()
+    model.fit(x_train, y_train)
+
+    # Predict and evaluate
+    preds = model.predict(x_test)
+   
+     
+    accuracy = accuracy_score(y_test, preds)
+
+    protected_attr_test = x_test[:,protected_attr_idx]
+    
+
+
+    dp = demographic_parity_difference(
+    y_test, preds, sensitive_features = protected_attr_test)
+
+    erd = equalized_odds_difference(y_test, preds, sensitive_features = protected_attr_test)
+
+    return accuracy, dp, erd
+
+
 
