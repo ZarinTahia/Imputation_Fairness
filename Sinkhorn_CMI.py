@@ -1,25 +1,28 @@
 import numpy as np
 import torch
 from geomloss import SamplesLoss
-
 from Utils import nanmean, MAE, RMSE
-from CMI import CMI
+from CMI_torch import (
+    estimate_CMI_soft_kronecker_gaussian,
+    estimate_CMI_gumbel_softmax_kernel,
+    estimate_CMI_separate_kernel,
+)
+import warnings
+warnings.filterwarnings("ignore", message="X does not have valid feature names", category=UserWarning)
 
-import logging 
 class SinkhornImputation_CMI():
-    # Initialization and other code...
-
-    def __init__(self, 
-                 eps=0.01, 
-                 lr=1e-2, 
-                 opt=torch.optim.RMSprop, 
+    def __init__(self,
+                 eps=0.01,
+                 lr=1e-2,
+                 opt=torch.optim.RMSprop,
                  niter=2000,
                  highest_lamda_cmi=100,
                  batchsize=128,
                  n_pairs=1,
                  noise=0.1,
                  scaling=.9,
-                 lambda_cmi=0.1):  # Added lambda_cmi for controlling the CMI penalty strength
+                 lambda_cmi=0.1,
+                 cmi_index=0):
         self.eps = eps
         self.lr = lr
         self.opt = opt
@@ -28,28 +31,23 @@ class SinkhornImputation_CMI():
         self.n_pairs = n_pairs
         self.noise = noise
         self.sk = SamplesLoss("sinkhorn", p=2, blur=eps, scaling=scaling, backend="tensorized")
-        self.lambda_cmi = lambda_cmi # Store the CMI penalty trade-off parameter
+        self.lambda_cmi = lambda_cmi
         self.highest_lamda_cmi = highest_lamda_cmi
+        self.cmi_index = cmi_index
 
-    def fit_transform(self, X, verbose=True, report_interval=500, X_true=None, X_cols=None, Y_cols=None, Z_cols=None, bucket_specs=None):
-        """
-        Imputes missing values using a batched OT loss and a weighted CMI penalty.
-        """
-        
+    def fit_transform(self, X, verbose=True, report_interval=500, X_true=None,
+                      X_cols=None, Y_cols=None, Z_cols=None,
+                      encoder=None, discrete_columns=None, continuous_columns=None,
+                      Y=None, data_processed=None, one_hot_encoded=None, continuous_part=None):
+
         torch.manual_seed(42)
         np.random.seed(42)
-    
+
         X = X.clone()
         n, d = X.shape
 
-        sinkhorn_loss_history = []
-        cmi_penalty_history = []
-        lamda_cmi = []
-        
         mask = torch.isnan(X).double()
-        imps = (self.noise * torch.randn(mask.shape).double() + nanmean(X, 0))[mask.bool()]
-    
-        
+        imps = (self.noise * torch.randn(mask.shape, dtype=X.dtype).to(X.device) + nanmean(X, 0))[mask.bool()]
         imps.requires_grad = True
 
         optimizer = self.opt([imps], lr=self.lr)
@@ -57,76 +55,78 @@ class SinkhornImputation_CMI():
         if X_true is not None:
             maes = np.zeros(self.niter)
             rmses = np.zeros(self.niter)
-     
 
         for i in range(self.niter):
-
             X_filled = X.detach().clone()
             X_filled[mask.bool()] = imps
-            loss = 0
+            sk_loss = 0
 
-            # Sinkhorn Loss
             for _ in range(self.n_pairs):
                 idx1 = np.random.choice(n, self.batchsize, replace=False)
                 idx2 = np.random.choice(n, self.batchsize, replace=False)
-        
                 X1 = X_filled[idx1]
                 X2 = X_filled[idx2]
-                loss = loss + self.sk(X1, X2) 
-                sinkhorn_loss_history.append(loss)
-                
-            
-        
-            
+                sk_loss += self.sk(X1, X2)
+
             self.lambda_cmi = min(self.highest_lamda_cmi, i / 100.0)
-            
-            
 
-            if torch.isnan(loss).any() or torch.isinf(loss).any():
-                logging.info("Nan or inf loss")
-                break
+            assert len(X_cols) == len(Y_cols) == len(Z_cols)
+            cmi = None
 
-            #cmi =  torch.tensor(CMI.conditional_mutual_information(X_filled, X_cols, Y_cols, Z_cols, bucket_specs),dtype=torch.float64, requires_grad=True)
-            cmi = CMI.conditional_mutual_information(X_filled,bucket_specs,X_cols, Y_cols, Z_cols)
-            cmi_penalty_history.append(cmi.item())
-            #self.lambda_cmi = (loss.item() / (cmi.item() + 1e-8))
-            #self.lamda_cmi = 0.1
-            #print("sk",loss)
-            loss = loss + self.lambda_cmi * cmi
-            lamda_cmi.append(self.lambda_cmi)
-            #print(self.lambda_cmi,cmi)
+            for j in range(len(X_cols)):
+                triplet = (X_cols[j], Y_cols[j], Z_cols[j])
 
-           
+                if self.cmi_index == 0:
+                    cmi_input = X_filled
+                    tcmi = estimate_CMI_soft_kronecker_gaussian(
+                        cmi_input, triplet, continuous_columns, discrete_columns
+                    )
+
+                elif self.cmi_index == 1 or self.cmi_index == 2:
+                    if Y is None:
+                        raise ValueError("Y must be provided when using CMI Method 2 or 3.")
+                    cmi_input = torch.cat([X_filled, Y.reshape(-1, 1)], dim=1)
+                    data_discrete = cmi_input[:, discrete_columns]
+                    data_continuous = cmi_input[:, continuous_columns]
+
+                    data_discrete_np = data_discrete.detach().cpu().numpy()
+                    encoded_array = encoder.transform(data_discrete_np)
+                    one_hot_tensor = torch.tensor(encoded_array, dtype=torch.float32, device=cmi_input.device, requires_grad=True)
+
+                    continuous_tensor = data_continuous.clone().detach().requires_grad_()
+                    data_combined_tensor = torch.cat([one_hot_tensor, continuous_tensor], dim=1)
+
+                    if self.cmi_index == 1:
+                        tcmi = estimate_CMI_gumbel_softmax_kernel(
+                            data_combined_tensor, triplet, discrete_columns, continuous_columns, encoder
+                        )
+                    else:
+                        tcmi = estimate_CMI_separate_kernel(
+                            one_hot_tensor, continuous_tensor, triplet, discrete_columns, continuous_columns, encoder
+                        )
+
+                tcmi.backward(retain_graph=True)
+                if imps.grad is not None:
+                    print(f"[GRAD] CMI-{self.cmi_index + 1} grad norm: {imps.grad.norm():.6f}")
+                    imps.grad.zero_()
+
+                cmi = tcmi if cmi is None else cmi + tcmi
+
+            cmi /= len(X_cols)
+            total_loss = sk_loss + self.lambda_cmi * cmi
 
             optimizer.zero_grad()
-            loss.backward()
+            total_loss.backward()
             optimizer.step()
-           
-        
 
             if X_true is not None:
                 maes[i] = MAE(X_filled, X_true, mask).item()
                 rmses[i] = RMSE(X_filled, X_true, mask).item()
 
             if verbose and (i % report_interval == 0):
-                if X_true is not None:
-                    
-                    logging.info(f'Iteration {i}:\t Loss: {loss.item() / self.n_pairs:.4f}\t '
-                                 f'Validation MAE: {maes[i]:.4f}\t'
-                                 f'RMSE: {rmses[i]:.4f}')
-                    
-                else:
-                    
-                    logging.info(f'Iteration {i}:\t Loss: {loss.item() / self.n_pairs:.4f}')
-
-        
-    
-
-   
+                print(f"Iteration {i}: Sinkhorn={sk_loss.item():.4f}, CMI={cmi.item():.4f}")
 
         if X_true is not None:
-            return X_filled, maes, rmses,cmi_penalty_history,sinkhorn_loss_history,lamda_cmi
+            return X_filled, maes, rmses, {}
         else:
-            return X_filled,cmi_penalty_history,sinkhorn_loss_history,lamda_cmi
-   
-    
+            return X_filled, {}
