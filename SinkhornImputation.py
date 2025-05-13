@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 from geomloss import SamplesLoss
-from Utils import nanmean, MAE, RMSE
+from utils import nanmean, MAE, RMSE
 import logging
 
 

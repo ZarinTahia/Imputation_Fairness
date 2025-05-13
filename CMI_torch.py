@@ -1,6 +1,38 @@
 import torch
 
 
+# Fix noise strength
+# Fix column index mismatch
+# apply imputation fix invalid value for discrete values.
+
+
+def generate_distributions_for_discrete_data(data_tensor, discrete_columns, encoder):
+    probabilities = []
+    for k, col_index in enumerate(discrete_columns):
+        x_col = data_tensor[:, col_index]
+        probabilities.append(torch.softmax(
+            torch.cat([(((x_col - val) ** 2 + 1e-20) ** -1).reshape(-1, 1) for val in encoder.categories_[k]],
+                      dim=-1), dim=-1))
+    probabilities = torch.cat(probabilities, dim=-1)
+
+    return probabilities
+
+
+def apply_gumbel_softmax(discrete_logits, feature_sizes, temperature=0.05):
+    soft_discrete_parts = []
+    start = 0
+    for size in feature_sizes:
+        end = start + size
+        gumbel_noise = -torch.log(-torch.log(torch.rand_like(discrete_logits[:, start:end]) + 1e-10) + 1e-10)
+        logits = discrete_logits[:, start:end]
+        soft = torch.softmax((logits + gumbel_noise) / temperature, dim=-1)
+        soft_discrete_parts.append(soft)
+        start = end
+    discrete_soft = torch.cat(soft_discrete_parts, dim=1)
+
+    return discrete_soft
+
+
 def estimate_CMI_soft_kronecker_gaussian(data_tensor, triplet, continuous_columns, discrete_columns, sigma=0.015,
                                          temperature=0.6):
     """
@@ -49,9 +81,9 @@ def estimate_CMI_soft_kronecker_gaussian(data_tensor, triplet, continuous_column
     K_z = kernel_matrix(data_tensor, [Z])
 
     return estimate_entropy(estimate_density(K_xz)) + \
-           estimate_entropy(estimate_density(K_yz)) - \
-           estimate_entropy(estimate_density(K_xyz)) - \
-           estimate_entropy(estimate_density(K_z))
+        estimate_entropy(estimate_density(K_yz)) - \
+        estimate_entropy(estimate_density(K_xyz)) - \
+        estimate_entropy(estimate_density(K_z))
 
 
 def estimate_CMI_gumbel_softmax_kernel(data_combined_tensor, triplet, discrete_columns, continuous_columns, encoder,
@@ -63,20 +95,11 @@ def estimate_CMI_gumbel_softmax_kernel(data_combined_tensor, triplet, discrete_c
     feature_sizes = [len(cats) for cats in encoder.categories_]
     total_discrete = sum(feature_sizes)
 
-    discrete_logits = data_combined_tensor[:, :total_discrete]
+    discrete_part = data_combined_tensor[:, :total_discrete]
+    discrete_logits = torch.log(discrete_part + 1e-10)
     continuous_part = data_combined_tensor[:, total_discrete:]
 
-    soft_discrete_parts = []
-    start = 0
-    for size in feature_sizes:
-        end = start + size
-        gumbel_noise = -torch.log(-torch.log(torch.rand_like(discrete_logits[:, start:end]) + 1e-10) + 1e-10)
-        logits = discrete_logits[:, start:end]
-        soft = torch.softmax((logits + gumbel_noise) / temperature, dim=-1)
-        soft_discrete_parts.append(soft)
-        start = end
-    discrete_soft = torch.cat(soft_discrete_parts, dim=1)
-
+    discrete_soft = apply_gumbel_softmax(discrete_logits, feature_sizes, temperature=temperature)
     data_soft = torch.cat([discrete_soft, continuous_part], dim=1)
 
     col_map = {}
@@ -107,12 +130,12 @@ def estimate_CMI_gumbel_softmax_kernel(data_combined_tensor, triplet, discrete_c
     K_z = compute_kernel_matrix(data_soft, [Z])
 
     return estimate_entropy(estimate_density(K_xz)) + \
-           estimate_entropy(estimate_density(K_yz)) - \
-           estimate_entropy(estimate_density(K_xyz)) - \
-           estimate_entropy(estimate_density(K_z))
+        estimate_entropy(estimate_density(K_yz)) - \
+        estimate_entropy(estimate_density(K_xyz)) - \
+        estimate_entropy(estimate_density(K_z))
 
 
-def estimate_CMI_separate_kernel(one_hot_tensor, continuous_tensor, triplet,
+def estimate_CMI_separate_kernel(data_combined_tensor, triplet,
                                  discrete_columns, continuous_columns, encoder,
                                  sigma=0.1, temperature=0.05):
     """
@@ -120,17 +143,13 @@ def estimate_CMI_separate_kernel(one_hot_tensor, continuous_tensor, triplet,
     """
 
     feature_sizes = [len(cats) for cats in encoder.categories_]
+    total_discrete = sum(feature_sizes)
 
-    soft_parts = []
-    start = 0
-    for size in feature_sizes:
-        end = start + size
-        gumbel_noise = -torch.log(-torch.log(torch.rand_like(one_hot_tensor[:, start:end]) + 1e-10) + 1e-10)
-        logits = one_hot_tensor[:, start:end]
-        soft = torch.softmax((logits + gumbel_noise) / temperature, dim=-1)
-        soft_parts.append(soft)
-        start = end
-    discrete_soft = torch.cat(soft_parts, dim=1)
+    discrete_part = data_combined_tensor[:, :total_discrete]
+    discrete_logits = torch.log(discrete_part + 1e-10)
+    continuous_part = data_combined_tensor[:, total_discrete:]
+
+    discrete_soft = apply_gumbel_softmax(discrete_logits, feature_sizes, temperature=temperature)
 
     def gaussian_kernel(X):
         dist_sq = torch.cdist(X, X, p=2) ** 2
@@ -161,7 +180,7 @@ def estimate_CMI_separate_kernel(one_hot_tensor, continuous_tensor, triplet,
             K_disc = gaussian_kernel(d_concat)
 
         if c_cols:
-            c_concat = torch.cat([continuous_tensor[:, slice(*cont_idx_map[c])] for c in c_cols], dim=1)
+            c_concat = torch.cat([continuous_part[:, slice(*cont_idx_map[c])] for c in c_cols], dim=1)
             K_cont = gaussian_kernel(c_concat)
 
         return K_disc * K_cont
@@ -183,12 +202,12 @@ def estimate_CMI_separate_kernel(one_hot_tensor, continuous_tensor, triplet,
     K_z = compute_kernel(d_z, c_z)
 
     return estimate_entropy(estimate_density(K_xz)) + \
-           estimate_entropy(estimate_density(K_yz)) - \
-           estimate_entropy(estimate_density(K_xyz)) - \
-           estimate_entropy(estimate_density(K_z))
+        estimate_entropy(estimate_density(K_yz)) - \
+        estimate_entropy(estimate_density(K_xyz)) - \
+        estimate_entropy(estimate_density(K_z))
+
 
 def compute_all_cmi_methods(data_tensor, data_combined_tensor,
-                            one_hot_tensor, continuous_tensor,
                             triplet, encoder,
                             discrete_columns, continuous_columns,
                             sigma=0.1, temperature=0.05):
@@ -197,8 +216,6 @@ def compute_all_cmi_methods(data_tensor, data_combined_tensor,
 
     :param data_tensor: torch.Tensor for mixed kernel method (original data)
     :param data_combined_tensor: torch.Tensor for Method 2 (Gumbel + combined features)
-    :param one_hot_tensor: torch.Tensor for discrete part (one-hot encoded)
-    :param continuous_tensor: torch.Tensor for continuous part
     :param triplet: tuple of (X, Y, Z) column names
     :param encoder: fitted OneHotEncoder
     :param discrete_columns: list of discrete column names
@@ -218,10 +235,9 @@ def compute_all_cmi_methods(data_tensor, data_combined_tensor,
     )
 
     cmi3 = estimate_CMI_separate_kernel(
-        one_hot_tensor, continuous_tensor, triplet,
+        data_combined_tensor, triplet,
         discrete_columns, continuous_columns, encoder=encoder,
         sigma=sigma, temperature=temperature
     )
 
     return cmi1, cmi2, cmi3
-

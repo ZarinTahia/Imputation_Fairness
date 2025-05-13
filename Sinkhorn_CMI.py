@@ -1,14 +1,16 @@
 import numpy as np
 import torch
 from geomloss import SamplesLoss
-from Utils import nanmean, MAE, RMSE
+from utils import nanmean, MAE, RMSE
 from CMI_torch import (
     estimate_CMI_soft_kronecker_gaussian,
     estimate_CMI_gumbel_softmax_kernel,
-    estimate_CMI_separate_kernel,
+    estimate_CMI_separate_kernel, generate_distributions_for_discrete_data,
 )
 import warnings
+
 warnings.filterwarnings("ignore", message="X does not have valid feature names", category=UserWarning)
+
 
 class SinkhornImputation_CMI():
     def __init__(self,
@@ -47,6 +49,7 @@ class SinkhornImputation_CMI():
         n, d = X.shape
 
         mask = torch.isnan(X).double()
+
         imps = (self.noise * torch.randn(mask.shape, dtype=X.dtype).to(X.device) + nanmean(X, 0))[mask.bool()]
         imps.requires_grad = True
 
@@ -85,30 +88,18 @@ class SinkhornImputation_CMI():
                 elif self.cmi_index == 1 or self.cmi_index == 2:
                     if Y is None:
                         raise ValueError("Y must be provided when using CMI Method 2 or 3.")
-                    cmi_input = torch.cat([X_filled, Y.reshape(-1, 1)], dim=1)
-                    data_discrete = cmi_input[:, discrete_columns]
-                    data_continuous = cmi_input[:, continuous_columns]
-
-                    data_discrete_np = data_discrete.detach().cpu().numpy()
-                    encoded_array = encoder.transform(data_discrete_np)
-                    one_hot_tensor = torch.tensor(encoded_array, dtype=torch.float32, device=cmi_input.device, requires_grad=True)
-
-                    continuous_tensor = data_continuous.clone().detach().requires_grad_()
-                    data_combined_tensor = torch.cat([one_hot_tensor, continuous_tensor], dim=1)
+                    data_continuous = X_filled[:, continuous_columns]
+                    discrete_distributions = generate_distributions_for_discrete_data(X_filled, discrete_columns, encoder)
+                    data_combined_tensor = torch.cat([discrete_distributions, data_continuous], dim=1)
 
                     if self.cmi_index == 1:
                         tcmi = estimate_CMI_gumbel_softmax_kernel(
-                            data_combined_tensor, triplet, discrete_columns, continuous_columns, encoder
+                            data_combined_tensor, triplet, discrete_columns, continuous_columns, encoder,
                         )
                     else:
                         tcmi = estimate_CMI_separate_kernel(
-                            one_hot_tensor, continuous_tensor, triplet, discrete_columns, continuous_columns, encoder
+                            data_combined_tensor, triplet, discrete_columns, continuous_columns, encoder
                         )
-
-                tcmi.backward(retain_graph=True)
-                if imps.grad is not None:
-                    print(f"[GRAD] CMI-{self.cmi_index + 1} grad norm: {imps.grad.norm():.6f}")
-                    imps.grad.zero_()
 
                 cmi = tcmi if cmi is None else cmi + tcmi
 
@@ -116,7 +107,9 @@ class SinkhornImputation_CMI():
             total_loss = sk_loss + self.lambda_cmi * cmi
 
             optimizer.zero_grad()
+            # torch.autograd.set_detect_anomaly(True)
             total_loss.backward()
+            # print(f"Sinkhorn loss: {sk_loss.item()}, CMI loss: {cmi.item()}, total loss: {total_loss.item()}")
             optimizer.step()
 
             if X_true is not None:
