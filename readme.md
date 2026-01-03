@@ -13,8 +13,15 @@ This repository investigates how imputing missing values with Optimal Transport 
 - experiments/ – Scripts for running OT imputation and fairness analysis.
 - imputation/ – Optimal Transport imputer implementation.
 - metrics/ – Functions for evaluating fairness and bias.
-- notebooks/ – Dataset-specific analysis and visualizations.
+- code/notebooks/ – Dataset-specific analysis and visualizations.
 - Output/ – Generated figures, tables, and logs.
 - utils/ – Data loading and preprocessing utilities.
 - requirements.txt – Required Python packages.
 - README.md – Project overview and instructions.
+
+## Contributing
+The project is ongoing. Contributions are welcome:
+- Add new datasets
+- Extend fairness metrics
+- Improve visualizations
+- Please submit issues or pull requests.
