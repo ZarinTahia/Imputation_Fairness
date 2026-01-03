@@ -1,6 +1,6 @@
 ## OT Imputation Fairness
 A research project exploring missing data imputation using Optimal Transport and its impact on fairness in machine learning models.
-This repository investigates how imputing missing values with Optimal Transport affects biases in datasets and evaluates whether the imputed data improves fairness in downstream models. The project is ongoing.
+This repository investigates how imputing missing values with Optimal Transport affects biases in datasets and evaluates whether the imputed data improves fairness in downstream models. We use Conditional Mutual Information (CMI) to evaluate biases in the datasets. CMI measures the dependency between features and sensitive attributes, helping us identify potential sources of unfairness before and after imputation. The project is ongoing.
 
 ## Features
 - Implements Optimal Transport (OT) imputation for tabular datasets.
